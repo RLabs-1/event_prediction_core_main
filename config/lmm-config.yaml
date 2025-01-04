@@ -1,0 +1,277 @@
+# LMM (Log Monitoring Manager) Configuration Schema
+# This is the main configuration file that defines all aspects of the LMM system
+version: "1.0"  # Schema version for compatibility tracking
+
+#############################################
+# GLOBAL SETTINGS
+# Core configuration that applies system-wide
+#############################################
+global:
+  # How often LMM checks for configuration changes
+  config_refresh_interval_seconds: 
+    value: 30    # Default check interval
+    min: 10      # Minimum allowed value to prevent excessive refreshes
+    max: 300     # Maximum allowed value to ensure timely updates
+  
+  # Default resource allocation for components if not specified elsewhere
+  default_resources:
+    cpu:
+      value: "0.5"    # Default CPU cores
+      min: "0.1"      # Minimum CPU allocation
+      max: "4.0"      # Maximum CPU allocation
+    memory:
+      value: "512Mi"  # Default memory allocation
+      min: "128Mi"    # Minimum memory needed
+      max: "8Gi"      # Maximum memory allowed
+  
+  # Default retry policy for failed operations
+  default_retry_policy:
+    max_attempts: 3                 # Maximum retry attempts before giving up
+    initial_backoff_seconds: 10     # Initial wait time between retries
+    max_backoff_seconds: 300        # Maximum wait time between retries
+
+#############################################
+# PATHS CONFIGURATION
+# Defines all filesystem paths used by LMM
+#############################################
+paths:
+  # Base path for LMM installation
+  base_path: "/opt/lmm"
+  
+  # Data paths for different operations
+  data:
+    logs: "/var/log/lmm"                # Main log storage
+    temp: "/var/lib/lmm/temp"           # Temporary processing files
+    checkpoint: "/var/lib/lmm/checkpoints" # Progress tracking
+    archive: "/var/lib/lmm/archive"     # Historical logs
+    failed: "/var/lib/lmm/failed"       # Failed processing logs
+  
+  # Backup locations
+  backup:
+    local: "/var/backup/lmm"    # Local backup storage
+    remote: "s3://lmm-backup"   # Remote backup location
+
+#############################################
+# KUBERNETES CONFIGURATION
+# Defines how LMM runs on Kubernetes
+#############################################
+kubernetes:
+  namespace: "logging"  # Kubernetes namespace for isolation
+  
+  # Controller Deployment Configuration
+  deployment:
+    controller:
+      replicas: 1      # Single replica as it's the control plane
+      pod_labels:      # Labels for pod identification
+        app: "lmm-controller"
+        component: "control-plane"
+      resources:       # Resource allocation
+        limits:        # Maximum resource usage
+          cpu: "1"
+          memory: "1Gi"
+        requests:      # Minimum resource guarantee
+          cpu: "500m"
+          memory: "512Mi"
+    
+    # Log File Reader (LFR) Worker Configuration
+    lfr:
+      min_replicas: 1    # Minimum running instances
+      max_replicas: 5    # Maximum running instances
+      pod_labels:
+        app: "lmm-lfr"
+        component: "worker"
+      resources:
+        limits:
+          cpu: "500m"
+          memory: "512Mi"
+        requests:
+          cpu: "200m"
+          memory: "256Mi"
+      # Horizontal Pod Autoscaling settings
+      hpa:
+        enabled: true
+        target_cpu_utilization: 80   # Scale when CPU hits 80%
+        scale_up_cooldown: "3m"      # Wait time before scaling up again
+        scale_down_cooldown: "5m"    # Wait time before scaling down again
+
+  # Minimum available pods for high availability
+  pdb:
+    min_available: 1
+
+  # Service configurations for networking
+  services:
+    controller:
+      type: ClusterIP     # Internal access only
+      port: 8080          # Service port
+    metrics:
+      type: ClusterIP
+      port: 9090         # Prometheus metrics port
+
+  # Storage configuration
+  volumes:
+    persistence:
+      enabled: true
+      storage_class: "standard"
+      size: "10Gi"
+      access_modes:
+        - ReadWriteOnce   # Single node access
+
+  # Security settings for pods
+  security_context:
+    run_as_user: 1000     # Non-root user
+    run_as_group: 1000    # Non-root group
+    fs_group: 1000        # File system group
+
+  # Pod scheduling preferences
+  affinity:
+    pod_anti_affinity:    # Spread pods across nodes
+      preferred_during_scheduling_ignored_during_execution:
+        - weight: 100
+          pod_affinity_term:
+            label_selector:
+              match_expressions:
+                - key: "app"
+                  operator: In
+                  values: ["lmm-lfr"]
+            topology_key: "kubernetes.io/hostname"
+
+#############################################
+# LOG SOURCES
+# Configuration for log file monitoring
+#############################################
+log_sources:
+  - name: "app-logs"       # Unique identifier
+    enabled: true          # Source is active
+    type: "file"          # Log source type
+    paths:                # Various paths for this source
+      main: "/var/log/app/*.log"
+      archive: "/var/log/app/archive/"
+      failed: "/var/log/app/failed/"
+      temp: "/var/log/app/temp/"
+    
+    # Instance scaling configuration
+    instances:
+      min: 1              # Minimum readers
+      max: 5              # Maximum readers
+      scale_up_threshold_cpu: 80    # Scale up point
+      scale_down_threshold_cpu: 20  # Scale down point
+    
+    # Resource allocation
+    resources:
+      cpu: "1.0"
+      memory: "1Gi"
+      disk: "5Gi"
+    
+    # Log format settings
+    format:
+      type: "json"        # Log format type
+      pattern: ""         # Custom pattern if needed
+    
+    # Filtering configuration
+    filters:
+      exclude_patterns:   # Patterns to ignore
+        - ".*DEBUG.*"
+        - ".*health-check.*"
+      min_log_level: "INFO"  # Minimum log level to process
+    
+    # Buffer settings for processing
+    buffer:
+      size: "100Mi"       # Maximum buffer size
+      flush_strategies:    # When to flush buffer
+        - time_based: 5
+        - size_based: "10Mi"
+        - event_count_based: 1000
+      overflow_strategy: "drop_oldest"  # What to do when full
+      persistent: true                  # Keep buffer on disk
+      persistence_path: "/var/lmm/buffer"
+    
+    # Progress tracking
+    checkpoint:
+      enabled: true
+      path: "/var/lib/lmm/checkpoints/"
+      interval_seconds: 60
+    
+    # Kafka output configuration
+    kafka:
+      topic: "raw-logs-app"     # Output topic
+      batch_size: 100           # Batch size for sending
+      compression_type: "snappy" # Compression method
+#############################################
+# MONITORING
+# Configuration for system monitoring
+#############################################
+monitoring:
+  metrics_port: 9090    # Port for Prometheus metrics
+  
+  # Health check configuration
+  health_check:
+    # Liveness probe - checks if component is running
+    liveness:
+      interval_seconds: 30        # Check frequency
+      timeout_seconds: 5          # Maximum response time
+      failure_threshold: 3        # Failures before restart
+    
+    # Readiness probe - checks if component can handle traffic
+    readiness:
+      initial_delay_seconds: 15   # Wait time on startup
+      interval_seconds: 10        # Check frequency
+    
+    # Custom health checks
+    custom_checks:
+      - name: "kafka_connection"  # Check Kafka connectivity
+        endpoint: "/kafka/health"
+        interval_seconds: 30
+
+#############################################
+# SECURITY
+# Security-related configurations
+#############################################
+security:
+  # TLS configuration
+  tls:
+    enabled: true                         # Enable TLS
+    cert_path: "/etc/lmm/certs/tls.crt"  # Certificate location
+    key_path: "/etc/lmm/certs/tls.key"   # Private key location
+  
+  # Authentication configuration
+  authentication:
+    enabled: true                        # Enable auth
+    type: "bearer_token"                 # Auth method
+    token_path: "/etc/lmm/auth/token"    # Token location
+
+#############################################
+# ERROR HANDLING
+# Error management and alerting
+#############################################
+error_handling:
+  max_retries: 3                 # Maximum retry attempts
+  backoff_multiplier: 2          # Exponential backoff factor
+  
+  # Alert configurations
+  alerts:
+    # Slack notifications
+    slack:
+      enabled: true
+      webhook_url: "${SLACK_WEBHOOK_URL}"  # Slack webhook
+      channel: "#log-monitoring"           # Slack channel
+    
+    # Email notifications
+    email:
+      enabled: false
+      smtp_server: "smtp.company.com"
+      from_address: "lmm@company.com"
+      to_addresses: ["team@company.com"]
+
+#############################################
+# PERFORMANCE TUNING
+# Performance optimization settings
+#############################################
+performance:
+  max_concurrent_reads: 5      # Maximum parallel reads
+  batch_size: 1000            # Events per batch
+  processing_threads: 4        # Worker threads
+  
+  # Rate limiting configuration
+  rate_limiting:
+    enabled: true
+    max_events_per_second: 10000  # Maximum processing rate
