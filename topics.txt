@@ -1,0 +1,7 @@
+LFR_TOPIC=lfr-topic
+EPT_TOPIC=ept-topic
+MM_TOPIC=mm-topic
+ESM_TOPIC=esm-topic
+LLM_TOPIC=llm-topic
+COL_TOPIC=col-topic
+RM_TOPIC=rm-topic

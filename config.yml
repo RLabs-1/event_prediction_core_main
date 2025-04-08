@@ -1,0 +1,7 @@
+kafka:
+  broker: kafka:9092
+  port: 9092
+  zookeeper_port: 2181
+
+kafka_ui:
+  port: 8080

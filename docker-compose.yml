@@ -1,0 +1,104 @@
+# version: '3.8'
+
+services:
+  zookeeper:
+    image: wurstmeister/zookeeper
+    container_name: zookeeper
+    ports:
+      - "${KAFKA_ZOOKEEPER_PORT}:${KAFKA_ZOOKEEPER_PORT}"
+    restart: always
+    env_file:
+      - .env
+
+  kafka:
+    image: wurstmeister/kafka
+    container_name: kafka
+    ports:
+      - "${KAFKA_PORT}:${KAFKA_PORT}"
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:${KAFKA_ZOOKEEPER_PORT}
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:${KAFKA_PORT}
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:${KAFKA_PORT}
+      KAFKA_BROKER_ID: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    depends_on:
+      - zookeeper
+    restart: always
+  
+  kafka-ui:
+    image: provectuslabs/kafka-ui
+    container_name: kafka-ui
+    ports:
+      - "${KAFKA_UI_PORT}:${KAFKA_UI_PORT}"  
+    environment:
+      KAFKA_CLUSTERS_0_NAME: ${KAFKA_UI_CLUSTER_NAME}  
+      KAFKA_CLUSTERS_0_BOOTSTRAP_SERVERS: ${KAFKA_UI_BOOTSTRAP_SERVERS}  
+      KAFKA_CLUSTERS_0_ZOOKEEPER: ${KAFKA_UI_ZOOKEEPER} 
+    depends_on:
+      - kafka
+    restart: always
+    env_file:
+      - .env
+
+  ept:
+    build: ./event_prediction_EPT
+    container_name: event_prediction_ept
+    depends_on:
+      - kafka
+    restart: on-failure
+    env_file:
+      - .env
+
+  lfr:
+    build: ./event_prediction_LFR
+    container_name: event_prediction_lfr
+    depends_on:
+      - kafka
+    restart: on-failure
+    env_file:
+      - .env
+
+  esm:
+    build: ./event_prediction_ESM
+    container_name: event_prediction_esm
+    depends_on:
+      - kafka
+    restart: on-failure
+    env_file:
+      - .env
+
+  ranking_model:
+    build: ./event_prediction_RM
+    container_name: event_prediction_rm
+    depends_on:
+      - kafka
+    restart: on-failure
+    env_file:
+      - .env
+
+  collector:
+    build: ./event_prediction_collector
+    container_name: event_prediction_collector
+    depends_on:
+      - kafka
+    restart: on-failure
+    env_file:
+      - .env
+
+  event_specialist:
+    build: ./event_prediction_LLM
+    container_name: event_prediction_llm
+    depends_on:
+      - kafka
+    restart: on-failure
+    env_file:
+      - .env
+
+  models_manager:
+    build: ./event_prediction_models_manager
+    container_name: event_prediction_models_manager
+    depends_on:
+      - kafka
+    restart: on-failure
+    env_file:
+      - .env
